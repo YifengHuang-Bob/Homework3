@@ -6,3 +6,241 @@ editor: visual
 ---
 
 This is the link to the repo: https://github.com/YifengHuang-Bob/Homework3
+
+
+# Problem 1
+
+## (a) Download and merge the datasets
+```{r}
+library(haven)
+
+aux <- read_xpt("data/AUX_I.xpt")
+demo <- read_xpt("data/DEMO_I.xpt")
+
+nhanes <- merge(aux, demo, by = "SEQN")
+
+dim(nhanes)
+```
+
+\
+
+## (b) Data cleaning
+
+```{r}
+nhanes$RIAGENDR <- factor(
+  nhanes$RIAGENDR,
+  levels = c(1, 2),
+  labels = c("Male", "Female")
+)
+
+```
+
+```{r}
+nhanes$DMDCITZN[nhanes$DMDCITZN %in% c(7, 9)] <- NA
+
+nhanes$DMDCITZN <- factor(
+  nhanes$DMDCITZN,
+  levels = c(1, 2),
+  labels = c("Citizen", "Not a citizen")
+)
+
+```
+
+```{r}
+nhanes$INDHHIN2[nhanes$INDHHIN2 %in% c(77, 99)] <- NA
+
+nhanes$INDHHIN2 <- factor(
+  nhanes$INDHHIN2,
+  levels = c(1:10, 14, 15, 13, 12),
+  labels = c(
+    "$0-$4,999",
+    "$5,000-$9,999",
+    "$10,000-$14,999",
+    "$15,000-$19,999",
+    "$20,000-$24,999",
+    "$25,000-$34,999",
+    "$35,000-$44,999",
+    "$45,000-$54,999",
+    "$55,000-$64,999",
+    "$65,000-$74,999",
+    "$75,000-$99,999",
+    "$100,000 and over",
+    "Under $20,000 (broad)",
+    "$20,000 and over (broad)"
+  )
+)
+
+```
+
+The original income codes do not follow a strictly increasing income order. I rearranged the detailed income categories from lowest to highest and placed the two broad, overlapping categories separately at the end, as they cannot be precisely ordered among the detailed income categories.
+
+\
+
+## (c) Poisson regression models
+
+```{r}
+nhanes$income_numeric <- as.numeric(nhanes$INDHHIN2)
+
+nhanes$income_numeric[nhanes$income_numeric > 12] <- NA
+
+```
+
+```{r}
+model_1r <- glm(
+  AUXTWIDR ~ RIAGENDR,
+  data = nhanes,
+  family = poisson(link = "log")
+)
+
+```
+
+```{r}
+model_2r <- glm(
+  AUXTWIDR ~ RIAGENDR + DMDCITZN + DMDHHSZA + income_numeric,
+  data = nhanes,
+  family = poisson(link = "log")
+)
+
+```
+
+```{r}
+model_1l <- glm(
+  AUXTWIDL ~ RIAGENDR,
+  data = nhanes,
+  family = poisson(link = "log")
+)
+
+```
+
+```{r}
+model_2l <- glm(
+  AUXTWIDL ~ RIAGENDR + DMDCITZN + DMDHHSZA + income_numeric,
+  data = nhanes,
+  family = poisson(link = "log")
+)
+
+```
+
+```{r}
+irr_table <- data.frame(
+  Predictor = c(
+    "Intercept (exp(coefficient))",
+    "Female",
+    "Not a citizen",
+    "Children (per unit)",
+    "Income level (per unit)"
+  ),
+  `1R` = c(exp(coef(model_1r)), rep(NA_real_, 3)),
+  `2R` = exp(coef(model_2r)),
+  `1L` = c(exp(coef(model_1l)), rep(NA_real_, 3)),
+  `2L` = exp(coef(model_2l)),
+  check.names = FALSE
+)
+
+options(knitr.kable.NA = "-")
+```
+
+
+```{r}
+knitr::kable(
+  irr_table,
+  row.names = FALSE,
+  digits = 4,
+  caption = "Exponentiated coefficients from the four Poisson regression models"
+)
+
+```
+
+\
+
+```{r}
+model_stats <- data.frame(
+  Statistic = c("Sample size", "Pseudo-R2 (deviance-based)", "AIC"),
+  `1R` = c(
+    format(nobs(model_1r), big.mark = ","),
+    sprintf("%.6f", 1 - deviance(model_1r) / model_1r$null.deviance),
+    format(round(AIC(model_1r)), big.mark = ",")
+  ),
+  `2R` = c(
+    format(nobs(model_2r), big.mark = ","),
+    sprintf("%.6f", 1 - deviance(model_2r) / model_2r$null.deviance),
+    format(round(AIC(model_2r)), big.mark = ",")
+  ),
+  `1L` = c(
+    format(nobs(model_1l), big.mark = ","),
+    sprintf("%.6f", 1 - deviance(model_1l) / model_1l$null.deviance),
+    format(round(AIC(model_1l)), big.mark = ",")
+  ),
+  `2L` = c(
+    format(nobs(model_2l), big.mark = ","),
+    sprintf("%.6f", 1 - deviance(model_2l) / model_2l$null.deviance),
+    format(round(AIC(model_2l)), big.mark = ",")
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  model_stats,
+  row.names = FALSE,
+  caption = "Model statistics for the four Poisson regression models"
+)
+
+```
+
+\
+
+## (d) Hypothesis tests
+
+```{r}
+gender_test <- coef(summary(model_2l))["RIAGENDRFemale", ]
+
+gender_test
+
+exp(coef(model_2l)["RIAGENDRFemale"])
+```
+
+```{r}
+emm_gender <- emmeans::emmeans(
+  model_2l,
+  ~ RIAGENDR
+)
+
+summary(emm_gender, type = "response")
+
+```
+
+```{r}
+gender_diff <- pairs(
+  emmeans::regrid(emm_gender, transform = "response"),
+  reverse = TRUE
+)
+
+summary(gender_diff, infer = c(TRUE, TRUE))
+
+```
+
+### Test 1 — IRR Comparison
+
+For Model 2L, the estimated female-to-male IRR is 1.0187. The Wald test gives $z = 5.160$ and $p = 2.47 \times 10^{-7}$. Therefore, we reject the null hypothesis that the IRR equals 1 at the 5% significance level. Holding other covariates constant, females have approximately 1.87% higher expected left-ear tympanometric width than males.
+
+### Test 2 — Predicted Value Comparison
+
+The adjusted predicted values are 84.8 for males and 86.3 for females. The estimated difference (Female − Male) is 1.59, with a 95% confidence interval of $[0.986, 2.19]$. The test gives $z = 5.161$ and $p < 0.0001$. Since the confidence interval excludes 0, we reject the null hypothesis of equal predicted values at the 5% significance level.
+
+### Note on Overdispersion
+
+These results are based on the standard Poisson model. Since the model shows evidence of overdispersion, the reported p-values and confidence intervals should be interpreted cautiously.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
