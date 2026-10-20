@@ -232,6 +232,425 @@ The adjusted predicted values are 84.8 for males and 86.3 for females. The estim
 These results are based on the standard Poisson model. Since the model shows evidence of overdispersion, the reported p-values and confidence intervals should be interpreted cautiously.
 
 
+\vspace{1.5cm}
+
+
+# Problem 2 - Sakila
+
+```{r}
+library(DBI)
+
+con <- dbConnect(
+  RSQLite::SQLite(),
+  "data/sakila_master.db"
+)
+
+```
+
+## (a) Customers and active percentages by store
+
+### Method 1 - SQL + R
+
+```{r}
+customer_data <- dbGetQuery(
+  con,
+  "SELECT store_id, active FROM customer"
+)
+
+customer_counts <- table(customer_data$store_id)
+
+active_percent <- tapply(
+  customer_data$active == "1",
+  customer_data$store_id,
+  mean
+) * 100
+
+result_r <- data.frame(
+  store_id = as.integer(names(customer_counts)),
+  customers = as.integer(customer_counts),
+  percent_active = as.numeric(active_percent)
+)
+
+knitr::kable(
+  result_r,
+  digits = 2,
+  row.names = FALSE,
+  caption = "Customer counts and active percentages by store (SQL + R)"
+)
+
+```
+
+### Method 2 - Single SQL Query
+
+```{r}
+result_sql <- dbGetQuery(
+  con,
+  "SELECT
+     store_id,
+     COUNT(*) AS customers,
+     ROUND(
+       100.0 * SUM(CASE WHEN active = '1' THEN 1 ELSE 0 END) / COUNT(*),
+       2
+     ) AS percent_active
+   FROM customer
+   GROUP BY store_id
+   ORDER BY store_id"
+)
+
+knitr::kable(
+  result_sql,
+  digits = 2,
+  row.names = FALSE,
+  caption = "Customer counts and active percentages by store (SQL only)"
+)
+
+```
+
+### Performance comparison
+
+```{r}
+bench_a <- microbenchmark::microbenchmark(
+  SQL_R = {
+    data_r <- dbGetQuery(
+      con,
+      "SELECT store_id, active FROM customer"
+    )
+
+    counts_r <- table(data_r$store_id)
+
+    percent_r <- tapply(
+      data_r$active == "1",
+      data_r$store_id,
+      mean
+    ) * 100
+
+    data.frame(
+      store_id = as.integer(names(counts_r)),
+      customers = as.integer(counts_r),
+      percent_active = as.numeric(percent_r)
+    )
+  },
+  SQL_only = {
+    dbGetQuery(
+      con,
+      "SELECT
+         store_id,
+         COUNT(*) AS customers,
+         ROUND(
+           100.0 * SUM(CASE WHEN active = '1' THEN 1 ELSE 0 END) / COUNT(*),
+           2
+         ) AS percent_active
+       FROM customer
+       GROUP BY store_id
+       ORDER BY store_id"
+    )
+  },
+  times = 100L
+)
+
+bench_summary <- summary(bench_a, unit = "us")
+
+median_sql_r <- bench_summary$median[bench_summary$expr == "SQL_R"]
+median_sql_only <- bench_summary$median[bench_summary$expr == "SQL_only"]
+
+bench_summary
+
+```
+
+The microbenchmark results show that the SQL-only approach is faster than the SQL + R approach. Over 100 evaluations, the median execution times were approximately `r sprintf("%.2f", median_sql_only)` and `r sprintf("%.2f", median_sql_r)` microseconds, respectively. Thus, the SQL-only approach was about `r sprintf("%.2f", median_sql_r / median_sql_only)` times faster in this benchmark, likely because the aggregation was performed directly in the database.
+
+\
+
+## (b) Staff names and countries
+
+### Method 1 - SQL + R
+
+```{r}
+staff_data <- dbGetQuery(
+  con,
+  "SELECT staff_id, first_name, last_name, address_id FROM staff"
+)
+
+address_data <- dbGetQuery(
+  con,
+  "SELECT address_id, city_id FROM address"
+)
+
+city_data <- dbGetQuery(
+  con,
+  "SELECT city_id, country_id FROM city"
+)
+
+country_data <- dbGetQuery(
+  con,
+  "SELECT country_id, country FROM country"
+)
+
+staff_info <- merge(staff_data, address_data, by = "address_id")
+staff_info <- merge(staff_info, city_data, by = "city_id")
+staff_info <- merge(staff_info, country_data, by = "country_id")
+
+result_r_b <- data.frame(
+  staff_id = staff_info$staff_id,
+  staff_name = paste(staff_info$first_name, staff_info$last_name),
+  country = staff_info$country
+)
+
+result_r_b <- result_r_b[order(result_r_b$staff_id), ]
+
+knitr::kable(
+  result_r_b,
+  row.names = FALSE,
+  caption = "Staff names and countries (SQL + R)"
+)
+
+```
+
+\
+
+### Method 2 - Single SQL Query
+
+```{r}
+result_sql_b <- dbGetQuery(
+  con,
+  "SELECT
+     s.staff_id,
+     s.first_name || ' ' || s.last_name AS staff_name,
+     co.country
+   FROM staff AS s
+   JOIN address AS a ON s.address_id = a.address_id
+   JOIN city AS ci ON a.city_id = ci.city_id
+   JOIN country AS co ON ci.country_id = co.country_id
+   ORDER BY s.staff_id"
+)
+
+knitr::kable(
+  result_sql_b,
+  row.names = FALSE,
+  caption = "Staff names and countries (SQL only)"
+)
+
+```
+
+### Performance comparison
+
+```{r}
+bench_b <- microbenchmark::microbenchmark(
+  SQL_R = {
+    staff_b <- dbGetQuery(
+      con,
+      "SELECT staff_id, first_name, last_name, address_id FROM staff"
+    )
+
+    address_b <- dbGetQuery(
+      con,
+      "SELECT address_id, city_id FROM address"
+    )
+
+    city_b <- dbGetQuery(
+      con,
+      "SELECT city_id, country_id FROM city"
+    )
+
+    country_b <- dbGetQuery(
+      con,
+      "SELECT country_id, country FROM country"
+    )
+
+    info_b <- merge(staff_b, address_b, by = "address_id")
+    info_b <- merge(info_b, city_b, by = "city_id")
+    info_b <- merge(info_b, country_b, by = "country_id")
+
+    result_b <- data.frame(
+      staff_id = info_b$staff_id,
+      staff_name = paste(info_b$first_name, info_b$last_name),
+      country = info_b$country
+    )
+
+    result_b[order(result_b$staff_id), ]
+  },
+  SQL_only = {
+    dbGetQuery(
+      con,
+      "SELECT
+         s.staff_id,
+         s.first_name || ' ' || s.last_name AS staff_name,
+         co.country
+       FROM staff AS s
+       JOIN address AS a ON s.address_id = a.address_id
+       JOIN city AS ci ON a.city_id = ci.city_id
+       JOIN country AS co ON ci.country_id = co.country_id
+       ORDER BY s.staff_id"
+    )
+  },
+  times = 100L
+)
+
+bench_summary_b <- summary(bench_b, unit = "us")
+
+median_sql_r_b <- bench_summary_b$median[bench_summary_b$expr == "SQL_R"]
+median_sql_only_b <- bench_summary_b$median[bench_summary_b$expr == "SQL_only"]
+
+bench_summary_b
+
+```
+
+The microbenchmark results show that the SQL-only approach is faster than the SQL + R approach. Over 100 evaluations, the median execution times were approximately `r sprintf("%.2f", median_sql_only_b)` and `r sprintf("%.2f", median_sql_r_b)` microseconds, respectively. Thus, the SQL-only approach was about `r sprintf("%.2f", median_sql_r_b / median_sql_only_b)` times faster in this benchmark, likely because it performs the joins directly in the database, avoiding multiple data transfers and additional merging operations in R.
+
+\
+
+## (c) Films rented for the highest dollar value
+
+### Method 1 - SQL + R
+
+```{r}
+payment_data <- dbGetQuery(
+  con,
+  "SELECT rental_id, amount FROM payment"
+)
+
+rental_data <- dbGetQuery(
+  con,
+  "SELECT rental_id, inventory_id FROM rental"
+)
+
+inventory_data <- dbGetQuery(
+  con,
+  "SELECT inventory_id, film_id FROM inventory"
+)
+
+film_data <- dbGetQuery(
+  con,
+  "SELECT film_id, title FROM film"
+)
+
+film_payments <- merge(payment_data, rental_data, by = "rental_id")
+film_payments <- merge(film_payments, inventory_data, by = "inventory_id")
+film_payments <- merge(film_payments, film_data, by = "film_id")
+
+max_amount <- max(film_payments$amount)
+
+result_r_c <- unique(
+  film_payments[film_payments$amount == max_amount, c("title", "amount")]
+)
+
+result_r_c <- result_r_c[order(result_r_c$title), ]
+
+names(result_r_c) <- c("film_title", "payment_usd")
+rownames(result_r_c) <- NULL
+
+knitr::kable(
+  result_r_c,
+  digits = 2,
+  row.names = FALSE,
+  caption = "Films rented for the highest dollar value (SQL + R)"
+)
+
+```
+
+\
+
+### Method 2 - Single SQL Query
+
+```{r}
+result_sql_c <- dbGetQuery(
+  con,
+  "SELECT DISTINCT
+     f.title AS film_title,
+     p.amount AS payment_usd
+   FROM payment AS p
+   JOIN rental AS r ON p.rental_id = r.rental_id
+   JOIN inventory AS i ON r.inventory_id = i.inventory_id
+   JOIN film AS f ON i.film_id = f.film_id
+   WHERE p.amount = (SELECT MAX(amount) FROM payment)
+   ORDER BY f.title"
+)
+
+knitr::kable(
+  result_sql_c,
+  digits = 2,
+  row.names = FALSE,
+  caption = "Films rented for the highest dollar value (SQL only)"
+)
+
+```
+
+\
+
+### Performance comparison
+
+```{r}
+bench_c <- microbenchmark::microbenchmark(
+  SQL_R = {
+    payment_c <- dbGetQuery(
+      con,
+      "SELECT rental_id, amount FROM payment"
+    )
+
+    rental_c <- dbGetQuery(
+      con,
+      "SELECT rental_id, inventory_id FROM rental"
+    )
+
+    inventory_c <- dbGetQuery(
+      con,
+      "SELECT inventory_id, film_id FROM inventory"
+    )
+
+    film_c <- dbGetQuery(
+      con,
+      "SELECT film_id, title FROM film"
+    )
+
+    film_payments_c <- merge(payment_c, rental_c, by = "rental_id")
+    film_payments_c <- merge(film_payments_c, inventory_c, by = "inventory_id")
+    film_payments_c <- merge(film_payments_c, film_c, by = "film_id")
+
+    max_amount_c <- max(film_payments_c$amount)
+
+    result_c <- unique(
+      film_payments_c[film_payments_c$amount == max_amount_c, c("title", "amount")]
+    )
+
+    result_c <- result_c[order(result_c$title), ]
+
+    names(result_c) <- c("film_title", "payment_usd")
+    rownames(result_c) <- NULL
+
+    result_c
+  },
+  SQL_only = {
+    dbGetQuery(
+      con,
+      "SELECT DISTINCT
+         f.title AS film_title,
+         p.amount AS payment_usd
+       FROM payment AS p
+       JOIN rental AS r ON p.rental_id = r.rental_id
+       JOIN inventory AS i ON r.inventory_id = i.inventory_id
+       JOIN film AS f ON i.film_id = f.film_id
+       WHERE p.amount = (SELECT MAX(amount) FROM payment)
+       ORDER BY f.title"
+    )
+  },
+  times = 100L
+)
+
+bench_summary_c <- summary(bench_c, unit = "us")
+
+median_sql_r_c <- bench_summary_c$median[bench_summary_c$expr == "SQL_R"]
+median_sql_only_c <- bench_summary_c$median[bench_summary_c$expr == "SQL_only"]
+
+bench_summary_c
+
+```
+
+The microbenchmark results show that the SQL-only approach is faster than the SQL + R approach. Over 100 evaluations, the median execution times were approximately `r sprintf("%.2f", median_sql_only_c)` and `r sprintf("%.2f", median_sql_r_c)` microseconds, respectively. Thus, the SQL-only approach was about `r sprintf("%.2f", median_sql_r_c / median_sql_only_c)` times faster in this benchmark, likely because it performs the joins and filtering directly in the database, reducing data transfer and additional processing in R.
+
+
+
+
+
 
 
 
