@@ -232,7 +232,9 @@ The adjusted predicted values are 84.8 for males and 86.3 for females. The estim
 These results are based on the standard Poisson model. Since the model shows evidence of overdispersion, the reported p-values and confidence intervals should be interpreted cautiously.
 
 
-\vspace{1.5cm}
+```{=typst}
+#v(35pt)
+```
 
 
 # Problem 2 - Sakila
@@ -648,7 +650,224 @@ bench_summary_c
 The microbenchmark results show that the SQL-only approach is faster than the SQL + R approach. Over 100 evaluations, the median execution times were approximately `r sprintf("%.2f", median_sql_only_c)` and `r sprintf("%.2f", median_sql_r_c)` microseconds, respectively. Thus, the SQL-only approach was about `r sprintf("%.2f", median_sql_r_c / median_sql_only_c)` times faster in this benchmark, likely because it performs the joins and filtering directly in the database, reducing data transfer and additional processing in R.
 
 
+```{=typst}
+#v(35pt)
+```
 
+
+# Problem 3 - Australian Records
+
+```{r}
+australia <- read.csv("data/au-500.csv", stringsAsFactors = FALSE)
+
+dim(australia)
+
+names(australia)
+
+head(australia)
+
+```
+
+\
+
+## (a) Percentage of .com websites
+
+```{r}
+is_com <- grepl("\\.com$", australia$web)
+
+sum(is_com)
+
+percent_com <- mean(is_com) * 100
+
+percent_com
+
+```
+
+Among the 500 websites, none end in `.com`, giving a percentage of 0%. Websites ending in `.com.au` or other domain extensions are not counted as `.com` websites.
+
+\
+
+## (b) Most common email domain
+
+```{r}
+email_domains <- sub(".*@", "", australia$email)
+
+domain_counts <- sort(table(email_domains), decreasing = TRUE)
+
+head(domain_counts, 10)
+
+most_common_domain <- domain_counts[domain_counts == max(domain_counts)]
+
+most_common_domain
+
+```
+
+The most common email domain is `hotmail.com`, appearing 114 times among the 500 email addresses (22.8%). The next most common domains are `gmail.com` (102 occurrences) and `yahoo.com` (84 occurrences).
+
+\
+
+## (c) Non-alphabetic characters in company names
+
+### Excluding commas and whitespace
+
+```{r}
+nonalpha <- grepl("[^[:alpha:],[:space:]]", australia$company_name)
+
+sum(nonalpha)
+
+proportion_nonalpha <- mean(nonalpha)
+
+proportion_nonalpha
+
+```
+
+
+### Also excluding ampersands
+
+```{r}
+nonalpha_no_amp <- grepl("[^[:alpha:],[:space:]&]", australia$company_name)
+
+sum(nonalpha_no_amp)
+
+proportion_no_amp <- mean(nonalpha_no_amp)
+
+proportion_no_amp
+
+```
+
+Excluding commas and whitespace, 45 out of 500 company names contain at least one non-alphabetic character, giving a proportion of 0.09 (9%). When ampersands (`&`) are also excluded, only 4 company names meet this criterion, reducing the proportion to 0.008 (0.8%).
+
+\
+
+## (d) Reformatting phone numbers
+
+```{r}
+#' Convert Phone Numbers to Cell-Phone Format
+#'
+#' Reformats 10-digit phone numbers into the Australian
+#' cell-phone format (XXXX-XXX-XXX).
+#'
+#' @param x A character vector of phone numbers.
+#' @return A character vector of reformatted phone numbers.
+#'
+#' @examples
+#' format_phone("03-8174-9123")
+
+format_phone <- function(x) {
+  digits <- gsub("[^0-9]", "", x)
+
+  paste0(
+    substr(digits, 1, 4), "-",
+    substr(digits, 5, 7), "-",
+    substr(digits, 8, 10)
+  )
+}
+
+australia$phone1_cell <- format_phone(australia$phone1)
+australia$phone2_cell <- format_phone(australia$phone2)
+
+phone_preview <- head(australia[c("phone1_cell", "phone2_cell")], 10)
+
+knitr::kable(
+  phone_preview,
+  row.names = FALSE,
+  caption = "First 10 phone numbers in cell-phone format"
+)
+
+```
+
+All phone numbers in both columns were reformatted into the cell-phone format `XXXX-XXX-XXX`. The original 10 digits were preserved, with only the positions of the hyphens changed. The first 10 reformatted phone numbers from each column are displayed above.
+
+\
+
+## (e) Histogram of log apartment numbers
+
+```{r}
+addresses <- trimws(australia$address)
+
+apartment_text <- regmatches(
+  addresses,
+  regexpr("[0-9]+$", addresses)
+)
+
+apartment_numbers <- as.numeric(apartment_text)
+
+apartment_numbers <- apartment_numbers[apartment_numbers > 0]
+
+length(apartment_numbers)
+
+summary(apartment_numbers)
+
+hist(
+  log(apartment_numbers),
+  breaks = 20,
+  main = "Histogram of Log Apartment Numbers",
+  xlab = "Log(Apartment Number)",
+  ylab = "Frequency"
+)
+
+```
+
+A total of 130 valid positive apartment numbers were extracted from the addresses. These numbers range from 1 to 8,611, with a median of 142.5. The histogram shows the distribution of their natural logarithms. The log transformation compresses the larger values, making the distribution easier to visualize.
+
+\
+
+## (f) Benford's law
+
+```{r}
+leading_digits <- substr(as.character(apartment_numbers), 1, 1)
+
+digit_counts <- table(factor(leading_digits, levels = 1:9))
+
+observed_percent <- as.numeric(digit_counts) / sum(digit_counts) * 100
+
+benford_probs <- log10(1 + 1 / (1:9))
+benford_percent <- benford_probs * 100
+
+benford_table <- data.frame(
+  Digit = 1:9,
+  Count = as.integer(digit_counts),
+  Observed_Percent = round(observed_percent, 2),
+  Benford_Percent = round(benford_percent, 2)
+)
+
+knitr::kable(
+  benford_table,
+  row.names = FALSE,
+  caption = "Observed leading-digit distribution vs. Benford's law"
+)
+
+```
+
+```{r}
+barplot(
+  rbind(
+    Observed = observed_percent,
+    Benford = benford_percent
+  ),
+  beside = TRUE,
+  names.arg = 1:9,
+  legend.text = TRUE,
+  args.legend = list(x = "topright", bty = "n"),
+  main = "Observed vs. Benford's Leading-Digit Distribution",
+  xlab = "Leading Digit",
+  ylab = "Percentage"
+)
+
+benford_test <- chisq.test(
+  x = digit_counts,
+  p = benford_probs
+)
+
+benford_test
+
+```
+
+The observed leading-digit distribution differs substantially from Benford's law. For example, only 9.23% of the apartment numbers begin with 1, compared with the expected 30.10%, while 14.62% begin with 9, compared with the expected 4.58%.
+
+The chi-square goodness-of-fit test gives a test statistic of 62.268 (df = 8, p-value = 1.67e-10). Since the p-value is much smaller than 0.05, we reject the null hypothesis that the leading digits follow Benford's law.
+
+Therefore, these apartment numbers would not pass a Benford's-law-based check for real data. However, this does not necessarily prove that the data are fake, since real apartment numbers may also deviate from Benford's law due to numbering conventions and other constraints.
 
 
 
